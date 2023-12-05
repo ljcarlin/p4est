@@ -24,6 +24,7 @@
 
 #include "gmt_models.h"
 #include <p4est_communication.h>
+#include<p4est_base.h>
 
 static void
 model_set_geom(p4est_gmt_model_t *model,
@@ -45,7 +46,8 @@ model_set_geom(p4est_gmt_model_t *model,
  * and should eventually be replaced with hashing.
 */
 static int model_resp_first (void *point, sc_array_t *owners) {
-  return sc_array_index_int(owners, 0);
+  int ret = *(int*)sc_array_index_int(owners, 0);
+  return ret;
 }
 
 typedef struct p4est_gmt_model_synth
@@ -356,6 +358,7 @@ model_sphere_owners(void *point, p4est_t * p4est)
 
   /* First atom */
   q.p.which_tree = seg->which_tree;
+  q.level = P4EST_MAXLEVEL;
   q.x = seg->bb1x;
   q.y = seg->bb1y;
   first = p4est_comm_find_owner(p4est, seg->which_tree, &q, 0); //TODO: Better guess?
@@ -371,32 +374,97 @@ model_sphere_owners(void *point, p4est_t * p4est)
     *(int*)sc_array_index_int(owners, i) = first+i;
   }
   
-  return &owners;
+  return owners;
 }
 
 p4est_gmt_model_t *
-p4est_gmt_model_sphere_new(int resolution)
+p4est_gmt_model_sphere_new(int resolution, int dist, sc_MPI_Comm mpicomm)
 {
-  FILE *geodesic_file;
+  //FILE *geodesic_file;
+  sc_MPI_File file_handle;
   p4est_gmt_model_t *model = P4EST_ALLOC_ZERO(p4est_gmt_model_t, 1);
   p4est_gmt_model_sphere_t *sdata = NULL;
-  int n_geodesics;
+  int rank, num_procs;
+  int mpiret;
+  int global_num_points, local_num_points;
+  int count;
+  p4est_gloidx_t offset_mine, offset_next;
+  sc_MPI_Offset mpi_offset;
+
+  model->model_data = sdata = P4EST_ALLOC(p4est_gmt_model_sphere_t, 1);
+
+  /* Get rank and number of processes */
+  mpiret = sc_MPI_Comm_size (mpicomm, &num_procs);
+  SC_CHECK_MPI (mpiret);
+  mpiret = sc_MPI_Comm_rank (mpicomm, &rank);
+  SC_CHECK_MPI (mpiret);
+
+  /* Open file of precomputed geodesic segments */
+  mpiret = sc_io_open (mpicomm, "geodesics", SC_IO_READ, sc_MPI_INFO_NULL,
+                       &file_handle);
+  SC_CHECK_MPI (mpiret);
+
+  if (rank == 0) {
+    /* read the global number of points from file */
+    mpiret = sc_io_read_at (file_handle, 0, &global_num_points,
+                            sizeof (int), sc_MPI_BYTE, &count);
+    SC_CHECK_MPI (mpiret);
+    SC_CHECK_ABORT (count == (int) sizeof (int),
+                    "Read number of global points: count mismatch");
+  }
+
+  /* broadcast the global number of points */
+  mpiret = sc_MPI_Bcast (&global_num_points, sizeof (int),
+                          sc_MPI_BYTE, 0, mpicomm);
+  SC_CHECK_MPI (mpiret);
+
+  /* set read offsets depending on whether we are running distributed */
+  if (dist==0) {
+    mpi_offset = 0;
+    local_num_points = global_num_points;
+  }
+  else {
+    /* offset to first point of current MPI process */
+    offset_mine = p4est_partition_cut_gloidx (global_num_points,
+                                            rank, num_procs);
+
+    /* offset to first point of successor MPI process */
+    offset_next = p4est_partition_cut_gloidx (global_num_points,
+                                            rank + 1, num_procs);
+
+    /* set file offset (in bytes) for this calling process */
+    mpi_offset = (sc_MPI_Offset) offset_mine * sizeof(p4est_gmt_sphere_geodesic_seg_t);
+
+    local_num_points = offset_next - offset_mine;
+  }
+
+  /* allocate buffer for geodesic segments */
+  sdata->points = P4EST_ALLOC(p4est_gmt_sphere_geodesic_seg_t, local_num_points);
+
+  /* TODO: is this right in non-distributed mode? */
+  /* each mpi process reads its data for its own offset */
+  mpiret = sc_io_read_at_all (file_handle, mpi_offset + sizeof (int),
+                            &(sdata->points[0]), 
+                            local_num_points * sizeof (p4est_gmt_sphere_geodesic_seg_t),
+                            sc_MPI_BYTE, &count);
+  SC_CHECK_MPI (mpiret);
+  SC_CHECK_ABORT (count == (int) (local_num_points 
+                                    * sizeof (p4est_gmt_sphere_geodesic_seg_t)),
+                    "Read points: count mismatch");
+
+  /* close the file collectively */
+  mpiret = sc_io_close (&file_handle);
+  SC_CHECK_MPI (mpiret);
+
+  /* Set final geodesic count */
+  sdata->num_geodesics = model->M = local_num_points; 
+
+  /* Set point size */
+  model->point_size = sizeof(p4est_gmt_sphere_geodesic_seg_t);
 
   /* the sphere model lives on the cube surface reference */
   model->conn = p4est_connectivity_new_cubed();
   model->output_prefix = "sphere";
-  model->model_data = sdata = P4EST_ALLOC(p4est_gmt_model_sphere_t, 1);
-
-  /* Read in precomputed geodesic segments */
-  geodesic_file = sc_fopen("geodesics", "r", 
-      "Could not open geodesics file. Run the preprocessing script first.");
-  sc_fread(&n_geodesics, sizeof(int), 1, geodesic_file, "reading n_geodesics");
-  sdata->points = P4EST_ALLOC(p4est_gmt_sphere_geodesic_seg_t, n_geodesics);
-  sc_fread(sdata->points, sizeof(p4est_gmt_sphere_geodesic_seg_t), n_geodesics, 
-            geodesic_file, "reading geodesics");
-  fclose(geodesic_file);
-
-  sdata->num_geodesics = model->M = n_geodesics; /* Set final geodesic count */
 
   /* Assign resolution, intersector, and destructor */
   sdata->resolution = resolution;

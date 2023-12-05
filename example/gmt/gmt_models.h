@@ -127,8 +127,11 @@ typedef struct p4est_gmt_model_sphere
  * \ref sphere_preprocessing.c must be called.
  *
  * \param[in] resolution maximum refinement level
+ * \param[in] dist       set to 1 if running in distributed mode
+ * \param[in] mpicomm    communicator
  */
-p4est_gmt_model_t  * p4est_gmt_model_sphere_new (int resolution);
+p4est_gmt_model_t
+*p4est_gmt_model_sphere_new (int resolution, int dist, sc_MPI_Comm mpicomm);
 
 /** Destroy model */
 void                p4est_gmt_model_destroy (p4est_gmt_model_t * model);
