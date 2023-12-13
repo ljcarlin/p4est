@@ -259,6 +259,8 @@ run_program_distributed (global_t * g)
   int                 num_owned_resp; 
   /* number of points that p should own in the next iteration (not responsible)*/
   int                 num_owned;
+  /* the number of bytes we are sending to q */
+  int                 send_count;
   /* q -> number of bytes we are receiving from q  */
   int                *recv_counts;
   /* q -> byte offset to receive at */
@@ -292,57 +294,60 @@ run_program_distributed (global_t * g)
   is responsible for their propagation*/
   num_owned = 0;
   num_owned_resp = g->model->M;
-  printf("Proc %d owns %d points\n", rank, num_owned_resp);
  
   for (refiter = 0;; ++refiter) {
     P4EST_GLOBAL_PRODUCTIONF ("Into refinement iteration %d\n", refiter);
     snprintf (filename, BUFSIZ, "p4est_gmt_%s_%02d",
               g->model->output_prefix, refiter);
+    printf("Proc %d is responsible for %d points\n", rank, num_owned_resp);
     P4EST_ASSERT(g->model != NULL);
     P4EST_ASSERT(g->model->model_geom != NULL);
     p4est_vtk_write_file (g->p4est, g->model->model_geom, filename);
     gnq_before = g->p4est->global_num_quadrants;
 
-    printf("Proc %d: Initialise array\n", rank);
+    //printf("Proc %d: Initialise array\n", rank);
     /* Initialise arrays for communicating points */
     for (int q = 0; q < num_procs; q++) {
       owned[q] = sc_array_new(g->model->point_size);
       owned_resp[q] = sc_array_new(g->model->point_size);
     }
 
-    printf("Proc %d: Prepare outgoing\n", rank);
+    //printf("Proc %d: Prepare outgoing\n", rank);
     /* Prepare outgoing arrays of points we are responsible for */
     for (int i = 0; i < num_owned_resp; i++) {
-      printf("Proc %d point %d\n", rank, i);
+      //printf("Proc %d point %d\n", rank, i);
       /* Determine which processes should receive this point */
-      printf("Proc %d owners\n", rank);
+      //printf("Proc %d owners\n", rank);
       owners = g->model->owners_fn(&(sdata->points[i]), g->p4est);
       /* Determine the receiver responsible for propagating this point in next
          iteration */
-      printf("Proc %d responsible\n", rank);
+      //printf("Proc %d responsible\n", rank);
       responsible = g->model->resp_fn(&(sdata->points[i]), owners);
+      P4EST_ASSERT(0 <= responsible && responsible < num_procs);
 
-      printf("Proc %d add to receivers\n", rank);
+      //printf("Proc %d add to receivers\n", rank);
       /* Add this point to the arrays of the processes who receive it */
-      for (int j = 0; j < owners->elem_count; j++) {
+      for (size_t j = 0; j < owners->elem_count; j++) {
         int q = *(int*)sc_array_index_int(owners, j);
         if (responsible == q)
         {
           /* Process q should own point i and be responsible for its propagation */
           sc_array_push(owned_resp[q]);
+          /* TODO this is hardcoded and should change */
           *(p4est_gmt_sphere_geodesic_seg_t*)sc_array_index_int(owned_resp[q], owned_resp[q]->elem_count-1) = sdata->points[i];
         }
         else 
         {
           /* Process q should own point i but not be responsible for its propagation */
           sc_array_push(owned[q]);
+          /* TODO this is hardcoded and should change */
           *(p4est_gmt_sphere_geodesic_seg_t*)sc_array_index_int(owned[q], owned[q]->elem_count-1) = sdata->points[i];
         }
       }
       sc_array_destroy(owners);
     } 
 
-    printf("Proc %d: Send points counts\n", rank);
+    //printf("Proc %d: Send points counts\n", rank);
     /* Tell each process q how many points it will own */
     for (int q = 0; q < num_procs; q++) { 
 
@@ -354,19 +359,20 @@ run_program_distributed (global_t * g)
       SC_CHECK_MPI (mpiret);
     }
 
-    printf("Proc %d: Free old points\n", rank);
+    //printf("Proc %d: Free old points\n", rank);
     /* Free the points we received last iteration */
     P4EST_FREE(sdata->points);
-    // /* Create array for incoming points */
+    /* Create array for incoming points */
     sdata->points = P4EST_ALLOC(p4est_gmt_sphere_geodesic_seg_t, num_owned_resp + num_owned);
     /* Update the amount of points known */
     g->model->M = num_owned_resp + num_owned;
 
-    printf("Proc %d: Send points\n", rank);
+    //printf("Proc %d: Send points\n", rank);
     /* Transmit points */
-    for (int q = 0; q < num_procs; q++) 
+    for (int q = 0; q < num_procs; q++) {
       /* Tell process q how many (resp) bytes it will receive from each process */
-      mpiret = sc_MPI_Gather(&((owned_resp[q]->elem_count) * sizeof(p4est_gmt_sphere_geodesic_seg_t)),
+      send_count = (owned_resp[q]->elem_count) * sizeof(p4est_gmt_sphere_geodesic_seg_t);
+      mpiret = sc_MPI_Gather(&send_count,
                                 sizeof(int),
                                 sc_MPI_BYTE,
                                 recv_counts,
@@ -405,8 +411,9 @@ run_program_distributed (global_t * g)
                                 g->mpicomm);
       SC_CHECK_MPI (mpiret);
 
-      /* Tell process q how many (resp) bytes it will receive from each process */
-      mpiret = sc_MPI_Gather(&((owned[q]->elem_count) * sizeof(p4est_gmt_sphere_geodesic_seg_t)),
+      /* Tell process q how many (not resp) bytes it will receive from each process */
+      send_count = (owned[q]->elem_count) * sizeof(p4est_gmt_sphere_geodesic_seg_t);
+      mpiret = sc_MPI_Gather(&send_count,
                                 sizeof(int),
                                 sc_MPI_BYTE,
                                 recv_counts,
@@ -424,7 +431,6 @@ run_program_distributed (global_t * g)
           displs[i] = displs[i-1] + recv_counts[i-1];
         }
       }
-      
 
       /* Set send buffer */
       if (owned[q]->elem_count != 0) {
@@ -439,14 +445,15 @@ run_program_distributed (global_t * g)
                                 (owned[q]->elem_count) * (g->model->point_size),
                                 sc_MPI_BYTE,
                                 &(sdata->points[num_owned_resp]), /* rec buffer is offset */
-                                (owned[q]->elem_count) * (g->model->point_size),
+                                recv_counts,
+                                displs,
                                 sc_MPI_BYTE,
                                 q,
                                 g->mpicomm);
       SC_CHECK_MPI (mpiret);
     }
 
-    printf("Proc %d: cleanup sending arrays \n", rank);
+    //printf("Proc %d: cleanup sending arrays \n", rank);
     /* Clean up arrays used for sending points */
     for (int q = 0; q < num_procs; q++) {
       sc_array_destroy(owned[q]);
@@ -478,6 +485,9 @@ run_program_distributed (global_t * g)
       p4est_balance (g->p4est, P4EST_CONNECT_FULL, quad_init);
     }
 
+    printf("Rank %d gnq_before = %ld\n", rank, gnq_before);
+    printf("Rank %d gnq_now = %ld\n", rank, g->p4est->global_num_quadrants);
+
     if (gnq_before < g->p4est->global_num_quadrants) {
       P4EST_GLOBAL_PRODUCTION ("Run mesh repartition\n");
       p4est_partition (g->p4est, 0, NULL);
@@ -487,9 +497,12 @@ run_program_distributed (global_t * g)
       break;
     }
   }
-  
 
   /* cleanup */
+  P4EST_FREE(owned);
+  P4EST_FREE(owned_resp);
+  P4EST_FREE(displs);
+  P4EST_FREE(recv_counts);
   p4est_destroy (g->p4est);
 }
 
