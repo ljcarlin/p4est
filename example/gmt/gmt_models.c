@@ -356,23 +356,40 @@ model_sphere_owners(void *point, p4est_t * p4est)
   p4est_quadrant_t q;
   sc_array_t *owners;
 
+  // /* DEBUG */
+
+  // owners = sc_array_new_count(sizeof(int), p4est->mpisize);
+
+  // for (int i = 0; i < p4est->mpisize; i++) {
+  //   *(int*)sc_array_index_int(owners, i) = i;
+  // }
+
+  // return owners;
+
+  // /* END DEBUG */
+
   /* First atom */
   q.p.which_tree = seg->which_tree;
   q.level = P4EST_MAXLEVEL;
   q.x = seg->bb1x;
   q.y = seg->bb1y;
   first = p4est_comm_find_owner(p4est, seg->which_tree, &q, 0); //TODO: Better guess?
-  
+  printf("First owner: %d\n\n", first);
+
   /* Last atom */
   q.x = seg->bb2x;
   q.y = seg->bb2y;
   last = p4est_comm_find_owner(p4est, seg->which_tree, &q, 0); //TODO: Better guess?
+  printf("Last owner: %d\n\n", first);
 
   owners = sc_array_new_count(sizeof(int), last-first+1);
 
+  printf("OWNERS: ");
   for (int i = 0; i <= last-first; i++) {
     *(int*)sc_array_index_int(owners, i) = first+i;
+    printf("%d, ", first+i);
   }
+  printf("\n");
   
   return owners;
 }
@@ -443,7 +460,7 @@ p4est_gmt_model_sphere_new(int resolution, int dist, sc_MPI_Comm mpicomm)
 
   /* TODO: is this right in non-distributed mode? */
   /* each mpi process reads its data for its own offset */
-  mpiret = sc_io_read_at_all (file_handle, mpi_offset + sizeof (int),
+  mpiret = sc_io_read_at_all (file_handle, mpi_offset + sizeof (size_t),
                             &(sdata->points[0]), 
                             local_num_points * sizeof (p4est_gmt_sphere_geodesic_seg_t),
                             sc_MPI_BYTE, &count);

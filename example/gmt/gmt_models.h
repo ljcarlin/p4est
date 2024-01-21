@@ -105,7 +105,7 @@ typedef struct p4est_gmt_sphere_geodesic_seg
 {
   int which_tree;
   double p1x, p1y, p2x, p2y; /* Geodesic endpoints */
-  double bb1x, bb1y, bb2x, bb2y; /* Bounding quadrant start and end atoms */
+  p4est_qcoord_t bb1x, bb1y, bb2x, bb2y; /* Bounding quadrant start and end atoms */
 } p4est_gmt_sphere_geodesic_seg_t;
 
 /** Data used by the sphere model */

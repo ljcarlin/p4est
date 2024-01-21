@@ -299,7 +299,8 @@ run_program_distributed (global_t * g)
     P4EST_GLOBAL_PRODUCTIONF ("Into refinement iteration %d\n", refiter);
     snprintf (filename, BUFSIZ, "p4est_gmt_%s_%02d",
               g->model->output_prefix, refiter);
-    printf("Proc %d is responsible for %d points\n", rank, num_owned_resp);
+    printf("Proc %d is responsible for %d points\n\n", rank, num_owned_resp);
+    printf("Proc %d knows %ld points\n\n", rank, g->model->M);
     P4EST_ASSERT(g->model != NULL);
     P4EST_ASSERT(g->model->model_geom != NULL);
     p4est_vtk_write_file (g->p4est, g->model->model_geom, filename);
@@ -403,7 +404,7 @@ run_program_distributed (global_t * g)
       mpiret = sc_MPI_Gatherv(send_buffer, 
                                 (owned_resp[q]->elem_count) * (g->model->point_size),
                                 sc_MPI_BYTE,
-                                sdata->points,
+                                sdata->points, /* rec buffer */
                                 recv_counts,
                                 displs,
                                 sc_MPI_BYTE,
@@ -461,8 +462,10 @@ run_program_distributed (global_t * g)
     }
 
     /* Set up search objects */
-    P4EST_GLOBAL_PRODUCTIONF ("Setting up %lld search objects\n",
-                            (long long) g->model->M);
+    P4EST_GLOBAL_PRODUCTION ("Setting up search objects\n");
+    /* P4EST_GLOBAL_PRODUCTIONF ("Setting up %lld search objects\n",
+                            (long long) g->model->M); */
+    printf("Proc %d is searching with %ld points\n\n", rank, g->model->M);
     points = sc_array_new_count (sizeof (size_t), g->model->M); //TODO
 
     for (zz = 0; zz < g->model->M; ++zz) {

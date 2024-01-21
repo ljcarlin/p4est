@@ -277,16 +277,16 @@ static void update_endpoints(const double xyz1[3], const double xyz2[3], int edg
 static void set_bounding_quadrant(p4est_gmt_sphere_geodesic_seg_t *seg) {
   double width;
   int8_t level;
-  int c1, c2, r1, r2;
+  int32_t c1, c2, r1, r2;
 
   width = 0.5;
   level = 1;
 
   for (int i = 0; i <= P4EST_MAXLEVEL; i++) {
-    c1 = (int) (seg->p1x/width);
-    r1 = (int) (seg->p1y/width);
-    c2 = (int) (seg->p2x/width);
-    r2 = (int) (seg->p2y/width);
+    c1 = (int32_t) (seg->p1x/width);
+    r1 = (int32_t) (seg->p1y/width);
+    c2 = (int32_t) (seg->p2x/width);
+    r2 = (int32_t) (seg->p2y/width);
     // printf("level %d \n", level);
     // printf("c1 = %d, c2 = %d\n", c1, c2);
     // printf("r1 = %d, r2 = %d\n", r1, r2);
@@ -296,18 +296,18 @@ static void set_bounding_quadrant(p4est_gmt_sphere_geodesic_seg_t *seg) {
       /* coordinates of one level of refinement less than level */
       width *= 2.0;
       level -= 1;
+      c1 = (int32_t) (seg->p1x/width);
+      r1 = (int32_t) (seg->p1y/width);
+
       // printf("Bounding quadrant has level %d\n", level);
-      seg->bb1x = width*floor(seg->p1x/width);
-      // printf("Column %f\n", floor(seg.p1x/width));
-      seg->bb1y = width*floor(seg->p1y/width);
-      // printf("Row %f\n", floor(seg.p1y/width));
-      // printf("Smallest width: %.10f\n", pow(2.0, -P4EST_MAXLEVEL));
-      seg->bb2x = width*(1.0+floor(seg->p1x/width)) - pow(2.0, -P4EST_MAXLEVEL);
-      seg->bb2y = width*(1.0+floor(seg->p1y/width)) - pow(2.0, -P4EST_MAXLEVEL);
-      // printf("bb1x: %f\n", seg.bb1x);
-      // printf("bb1y: %f\n", seg.bb1y);
-      // printf("bb2x: %f\n", seg.bb2x);
-      // printf("bb2y: %f\n", seg.bb2y);
+      seg->bb1x = c1 * P4EST_QUADRANT_LEN(level);
+      seg->bb1y = r1 * P4EST_QUADRANT_LEN(level);
+      seg->bb2x = (c1+1) * P4EST_QUADRANT_LEN(level) - 1;
+      seg->bb2y = (r1+1) * P4EST_QUADRANT_LEN(level) - 1;
+      printf("bb1x: %d\n", seg->bb1x);
+      printf("bb1y: %d\n", seg->bb1y);
+      printf("bb2x: %d\n", seg->bb2x);
+      printf("bb2y: %d\n", seg->bb2y);
       return;
     }
 
@@ -317,9 +317,8 @@ static void set_bounding_quadrant(p4est_gmt_sphere_geodesic_seg_t *seg) {
   
   /* We have hit P4EST_MAXLEVEL and still not separated p1 and p2. So their bounding
      quadrant is an atom. */
-  width = pow(2.0, -P4EST_MAXLEVEL);
-  seg->bb1x = seg->bb2x = width*floor(seg->p1x/width);
-  seg->bb1y = seg->bb2y = width*floor(seg->p1y/width);
+  seg->bb1x = seg->bb2x = c1;
+  seg->bb1y = seg->bb2y = r1;
 }
 
 /** Load geodesics from input csv, convert to Cartesian coordinates, split into
@@ -336,7 +335,7 @@ int main(int argc, char **argv)
   double angular1[2], xyz1[3], rst1[3]; /* angular, cartesian, and tree-local coords respectively*/
   double angular2[2], xyz2[3], rst2[3];
   int which_tree_1, which_tree_2;
-  int n_geodesics, capacity; /* capacity is the size of our dynamic array */
+  size_t n_geodesics, capacity; /* capacity is the size of our dynamic array */
   double endpoints[6][2][3]; /* stores endpoints of split geodesics in cartesian coords */
   int endpoints_count[6];    /* counts endpoints of split geodesics assigned to each face */
 
@@ -386,16 +385,6 @@ int main(int argc, char **argv)
 
       printf("Geodesic (%f, %f) -> (%f, %f)\n", rst1[0], rst1[1], rst2[0], rst2[1]);
       set_bounding_quadrant(&geodesics[n_geodesics]);
-      printf("Bounding quadrant. Start (%f, %f)  End (%f, %f)\n\n",
-              geodesics[n_geodesics].bb1x,
-              geodesics[n_geodesics].bb1y,
-              geodesics[n_geodesics].bb2x,
-              geodesics[n_geodesics].bb2y
-            );
-      printf("bb1x: %f\n", geodesics[n_geodesics].bb1x);
-      printf("bb1y: %f\n", geodesics[n_geodesics].bb1y);
-      printf("bb2x: %f\n", geodesics[n_geodesics].bb2x);
-      printf("bb2y: %f\n", geodesics[n_geodesics].bb2y);
 
       n_geodesics++;
     }
@@ -462,16 +451,6 @@ int main(int argc, char **argv)
         geodesics[n_geodesics].p2y = rst2[1];
         printf("Geodesic (%f, %f) -> (%f, %f)\n", rst1[0], rst1[1], rst2[0], rst2[1]);
         set_bounding_quadrant(&geodesics[n_geodesics]);
-        printf("Bounding quadrant. Start (%f, %f)  End (%f, %f)\n\n",
-                geodesics[n_geodesics].bb1x,
-                geodesics[n_geodesics].bb1y,
-                geodesics[n_geodesics].bb2x,
-                geodesics[n_geodesics].bb2y
-              );
-        printf("bb1x: %f\n", geodesics[n_geodesics].bb1x);
-        printf("bb1y: %f\n", geodesics[n_geodesics].bb1y);
-        printf("bb2x: %f\n", geodesics[n_geodesics].bb2x);
-        printf("bb2y: %f\n", geodesics[n_geodesics].bb2y);
 
         n_geodesics++;
       }
@@ -482,12 +461,12 @@ int main(int argc, char **argv)
   geodesics = P4EST_REALLOC(geodesics, p4est_gmt_sphere_geodesic_seg_t, n_geodesics);
 
   fclose(fp);                                    /* Finished loading geodesics */
-  printf("n_geodesics %d\n", n_geodesics);
+  printf("n_geodesics %ld\n", n_geodesics);
 
   /* Write geodesics to disk */
   geodesic_file = sc_fopen("geodesics", "w", "opening geodesics file");
   /* Write n_geodesics */
-  sc_fwrite(&n_geodesics, sizeof(int), 1, geodesic_file, "writing n_geodesics");
+  sc_fwrite(&n_geodesics, sizeof(size_t), 1, geodesic_file, "writing n_geodesics");
   /* Write geodesics */
   sc_fwrite(geodesics, sizeof(p4est_gmt_sphere_geodesic_seg_t), n_geodesics, 
               geodesic_file, "writing geodesics");
