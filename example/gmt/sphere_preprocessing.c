@@ -276,13 +276,11 @@ static void update_endpoints(const double xyz1[3], const double xyz2[3], int edg
  */
 static void set_bounding_quadrant(p4est_gmt_sphere_geodesic_seg_t *seg) {
   double width;
-  int8_t level;
   int32_t c1, c2, r1, r2;
 
   width = 0.5;
-  level = 1;
 
-  for (int i = 0; i <= P4EST_MAXLEVEL; i++) {
+  for (int8_t level = 1; level <= P4EST_QMAXLEVEL; level++) {
     c1 = (int32_t) (seg->p1x/width);
     r1 = (int32_t) (seg->p1y/width);
     c2 = (int32_t) (seg->p2x/width);
@@ -302,8 +300,8 @@ static void set_bounding_quadrant(p4est_gmt_sphere_geodesic_seg_t *seg) {
       // printf("Bounding quadrant has level %d\n", level);
       seg->bb1x = c1 * P4EST_QUADRANT_LEN(level);
       seg->bb1y = r1 * P4EST_QUADRANT_LEN(level);
-      seg->bb2x = (c1+1) * P4EST_QUADRANT_LEN(level) - 1;
-      seg->bb2y = (r1+1) * P4EST_QUADRANT_LEN(level) - 1;
+      seg->bb2x = (c1+1) * P4EST_QUADRANT_LEN(level) - 2;
+      seg->bb2y = (r1+1) * P4EST_QUADRANT_LEN(level) - 2;
       printf("bb1x: %d\n", seg->bb1x);
       printf("bb1y: %d\n", seg->bb1y);
       printf("bb2x: %d\n", seg->bb2x);
@@ -312,13 +310,12 @@ static void set_bounding_quadrant(p4est_gmt_sphere_geodesic_seg_t *seg) {
     }
 
     width *= 0.5;
-    level += 1;
   }
   
   /* We have hit P4EST_MAXLEVEL and still not separated p1 and p2. So their bounding
-     quadrant is an atom. */
-  seg->bb1x = seg->bb2x = c1;
-  seg->bb1y = seg->bb2y = r1;
+     quadrant has dimension 2x2. */
+  seg->bb1x = seg->bb2x = c1 * 2;
+  seg->bb1y = seg->bb2y = r1 * 2;
 }
 
 /** Load geodesics from input csv, convert to Cartesian coordinates, split into

@@ -370,27 +370,23 @@ model_sphere_owners(void *point, p4est_t * p4est)
 
   /* First atom */
   q.p.which_tree = seg->which_tree;
-  q.level = P4EST_MAXLEVEL;
+  q.level = P4EST_QMAXLEVEL;
   q.x = seg->bb1x;
   q.y = seg->bb1y;
   first = p4est_comm_find_owner(p4est, seg->which_tree, &q, 0); //TODO: Better guess?
-  printf("First owner: %d\n\n", first);
+  //printf("First owner: %d\n\n", first);
 
   /* Last atom */
   q.x = seg->bb2x;
   q.y = seg->bb2y;
   last = p4est_comm_find_owner(p4est, seg->which_tree, &q, 0); //TODO: Better guess?
-  printf("Last owner: %d\n\n", first);
+  //printf("Last owner: %d\n\n", first);
 
   owners = sc_array_new_count(sizeof(int), last-first+1);
-
-  printf("OWNERS: ");
   for (int i = 0; i <= last-first; i++) {
     *(int*)sc_array_index_int(owners, i) = first+i;
-    printf("%d, ", first+i);
   }
-  printf("\n");
-  
+
   return owners;
 }
 
