@@ -28,6 +28,9 @@
 #include <p4est_geometry.h>
 #include <p4est.h>
 
+/** General, application specific model data */
+typedef struct p4est_gmt_model p4est_gmt_model_t;
+
 /** Used to free private model data. */
 typedef void        (*p4est_gmt_destroy_data_t) (void *vmodel_data);
 
@@ -44,10 +47,25 @@ typedef sc_array_t* (*p4est_gmt_owners_fn_t) (void *point, p4est_t * p4est);
  * \param[in] point  The point to be propagated
  * \param[in] owners The owners of the point
  */
-typedef int (*p4est_gmt_resp_fn_t) (void *point, sc_array_t* owners); 
+typedef int (*p4est_gmt_resp_fn_t) (void *point, sc_array_t* owners);
 
-/** General, application specific model data */
-typedef struct p4est_gmt_model
+/** Communicate all points to the processes whose domain may contain them
+ * 
+ * In distributed mode each process only has knowledge of a subset of the
+ * points. This function is run before search-based refinement and must
+ * guarantee that all processes have knowledge of the points potentially
+ * relevant to their search. Concretely, this means:
+ *  - updating g->model->model_data on each process to reflect point knowledge
+ *  - updating g->model->M to reflect (local) number of points to be searched
+ * These updates must be done in such a way that g->model->intersect continues
+ * to work as intended when the search-based refinement searches with the
+ * points 0, ..., g->model->M - 1.
+ */
+typedef void (*p4est_gmt_communicate_points_t) (sc_MPI_Comm mpicomm,
+                                                p4est_t *p4est,
+                                                p4est_gmt_model_t *model);
+
+struct p4est_gmt_model
 {
   size_t              M;
   const char         *output_prefix;
@@ -65,12 +83,15 @@ typedef struct p4est_gmt_model
   /** Private geometry data. */
   p4est_geometry_t    sgeom;
 
-  /** Determine owners of point. Can be NULL if not running distributed  */
+  /** Functions for running in distributed mode. Can be NULL if not running
+   *  distributed */
+  /** Communicate all points to the processes whose domain may contain them*/
+  p4est_gmt_communicate_points_t communicate_points;
+  /** Determine owners of point */
   p4est_gmt_owners_fn_t owners_fn;
   /** Determine who is responsible for propagating point */
   p4est_gmt_resp_fn_t resp_fn;
-}
-p4est_gmt_model_t;
+};
 
 /** Create a specific synthetic model */
 p4est_gmt_model_t  *p4est_gmt_model_synth_new (int synthno, int resolution);
@@ -112,7 +133,10 @@ typedef struct p4est_gmt_sphere_geodesic_seg
 typedef struct p4est_gmt_model_sphere
 {
   int resolution;
-  size_t num_geodesics;
+  /* number of geodesics which this rank must propagate */
+  size_t num_owned_resp;
+  /* number of geodesics which this rank knows but need not propagate */
+  size_t num_owned;
   p4est_gmt_sphere_geodesic_seg_t *points;
 } p4est_gmt_model_sphere_t;
 
