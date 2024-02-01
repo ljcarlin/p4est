@@ -185,7 +185,6 @@ run_program (global_t * g)
 
     /* Communicate points */
     if (g->distributed) {
-      printf("TEST0\n");
       g->model->communicate_points(g->mpicomm, g->p4est, g->model);
     }
     
@@ -251,7 +250,6 @@ usagerr (sc_options_t * opt, const char *msg)
 int
 main (int argc, char **argv)
 {
-  printf("START\n");
   int                 mpiret;
   int                 ue, fa;
   sc_options_t       *opt;
@@ -288,8 +286,6 @@ main (int argc, char **argv)
   sc_options_add_bool (opt, 'd', "distributed", &g->distributed, 0,
                        "Distributed read mode");
 
-  printf("OPTIONS DONE\n");
-
   /* proceed in run-once loop for cleaner error checking */
   ue = 0;
   do {
@@ -325,8 +321,6 @@ main (int argc, char **argv)
     sc_options_print_usage (p4est_package_id, SC_LP_ERROR, opt, NULL);
   }
 
-  printf("Entering model setup\n");
-
   /* setup appplication model */
   if (!ue && setup_model (g)) {
     P4EST_ASSERT (g->model == NULL);
@@ -339,7 +333,6 @@ main (int argc, char **argv)
                         "function");
   }
 
-  printf("Executing application\n");
   /* execute application model */
   if (!ue) {
     P4EST_ASSERT (g->model != NULL);
