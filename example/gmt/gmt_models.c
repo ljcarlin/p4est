@@ -448,14 +448,12 @@ static void sphere_compute_outgoing_points(p4est_gmt_sphere_comm_t *resp,
       if (responsible == q)
       {
         /* Process q should own point i and be responsible for its propagation */
-        sc_array_push(resp->to_send[q]);
-        *(p4est_gmt_sphere_geodesic_seg_t*)sc_array_index_int(resp->to_send[q], resp->to_send[q]->elem_count-1) = sdata->points[i];
+        *(p4est_gmt_sphere_geodesic_seg_t*)sc_array_push(resp->to_send[q]) = sdata->points[i];
       }
       else 
       {
         /* Process q should own point i but not be responsible for its propagation */
-        sc_array_push(own->to_send[q]);
-        *(p4est_gmt_sphere_geodesic_seg_t*)sc_array_index_int(own->to_send[q], own->to_send[q]->elem_count-1) = sdata->points[i];
+        *(p4est_gmt_sphere_geodesic_seg_t*)sc_array_push(own->to_send[q]) = sdata->points[i];
       }
     }
 
@@ -483,12 +481,9 @@ static void sphere_compute_receivers(p4est_gmt_sphere_comm_t *comm, int num_proc
   for (int q = 0; q < num_procs; q++) {
     if (comm->to_send[q]->elem_count != 0) {
       /* add q to receivers */
-      sc_array_push(comm->receivers);
-      *(int*)sc_array_index_int(comm->receivers, comm->receivers->elem_count-1) = q;
+      *(int*)sc_array_push(comm->receivers) = q;
       /* record how many points p is sending to q */
-      sc_array_push(comm->recvs_counts);
-      *(size_t*)sc_array_index_int(comm->recvs_counts, comm->recvs_counts->elem_count-1) 
-          = comm->to_send[q]->elem_count;
+      *(size_t*)sc_array_push(comm->recvs_counts) = comm->to_send[q]->elem_count;
     }
   }
   P4EST_ASSERT(comm->receivers->elem_count == comm->recvs_counts->elem_count);
@@ -621,6 +616,13 @@ model_sphere_communicate_points(sc_MPI_Comm mpicomm,
   sphere_compute_receivers(&own, num_procs);
   sphere_compute_receivers(&resp, num_procs);
 
+  /* initialise outgoing request arrays */
+  recv_req = P4EST_ALLOC(sc_MPI_Request, own.receivers->elem_count + resp.receivers->elem_count);
+
+  /* post non-blocking sends */
+  sphere_post_sends(&resp, mpicomm, recv_req, model->point_size);
+  sphere_post_sends(&own, mpicomm, recv_req + resp.receivers->elem_count, model->point_size);
+
   /* initialize buffers for receiving communication data with sc_notify_ext */
   own.senders = sc_array_new(sizeof(int));
   resp.senders = sc_array_new(sizeof(int));
@@ -645,13 +647,6 @@ model_sphere_communicate_points(sc_MPI_Comm mpicomm,
 
   /* allocate memory for incoming points */
   sdata->points = P4EST_ALLOC(p4est_gmt_sphere_geodesic_seg_t, model->M);
-
-  /* initialise outgoing request arrays */
-  recv_req = P4EST_ALLOC(sc_MPI_Request, own.receivers->elem_count + resp.receivers->elem_count);
-
-  /* post non-blocking sends */
-  sphere_post_sends(&resp, mpicomm, recv_req, model->point_size);
-  sphere_post_sends(&own, mpicomm, recv_req + resp.receivers->elem_count, model->point_size);
 
   /* initialise incoming request arrays */
   sender_req = P4EST_ALLOC(sc_MPI_Request, own.senders->elem_count + resp.senders->elem_count);
