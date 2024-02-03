@@ -357,18 +357,6 @@ model_sphere_owners(void *point, p4est_t * p4est)
   p4est_quadrant_t q;
   sc_array_t *owners;
 
-  // /* DEBUG */
-
-  // owners = sc_array_new_count(sizeof(int), p4est->mpisize);
-
-  // for (int i = 0; i < p4est->mpisize; i++) {
-  //   *(int*)sc_array_index_int(owners, i) = i;
-  // }
-
-  // return owners;
-
-  // /* END DEBUG */
-
   /* First atom */
   q.p.which_tree = seg->which_tree;
   q.level = P4EST_QMAXLEVEL;
@@ -391,20 +379,99 @@ model_sphere_owners(void *point, p4est_t * p4est)
   return owners;
 }
 
-/** Communication data for the sphere model */
+/** Communication data for the sphere model.
+ * 
+ *  This avoids duplicate code since communication patterns are essentially
+ *  identical for the two types of point we send (owned and responsible).
+ */
 typedef struct p4est_gmt_sphere_comm 
 {
   int num_incoming; /* number of points that p receives in this iteration */
   sc_array_t **to_send; /* q -> {points that should be sent to q } */
   sc_array_t *receivers; /* Ranks receiving points from p */
-  sc_array_t *senders; /* Ranks sending points to p */
   sc_array_t *recvs_counts; /* Number of points each receiver gets from p */
+  sc_array_t *senders; /* Ranks sending points to p */
   sc_array_t *senders_counts; /* Number of points p gets from each sender */
-  size_t * offsets; /* Offsets for incoming messages */
+  size_t * offsets; /* q -> offset to receive message from q at */
 } p4est_gmt_sphere_comm_t;
 
-/** Determine the processes p is sending points to and how many points are
- *  being sent
+/** Prepare outgoing buffers of points to propagate.
+ * 
+ * 
+ * 
+ * \param[out] resp Comm data for points whose receiver will be responsible
+ *                  for propagating them in the next iteration
+ * \param[out] own  Comm data for points whose receiver will *not* be
+ *                  responsible for propagating in the next iteration
+ * \param[in] p4est The forest
+ * \param[in] model Sphere model
+ * \param[in] num_procs Number of MPI processes
+ */
+static void sphere_compute_outgoing_points(p4est_gmt_sphere_comm_t *resp,
+                                           p4est_gmt_sphere_comm_t *own,
+                                           p4est_t *p4est,
+                                           p4est_gmt_model_t *model,
+                                           int num_procs
+                                          )
+{
+  /* Sphere model */
+  p4est_gmt_model_sphere_t *sdata = (p4est_gmt_model_sphere_t *)model->model_data;
+  /** per point data **/
+  sc_array_t         *owners; /* who to send the point to */
+  int                 responsible; /* who is in charge of propagating the point */
+
+  /* Initialise index of outgoing message buffers */
+  own->to_send = P4EST_ALLOC(sc_array_t*, num_procs);
+  resp->to_send = P4EST_ALLOC(sc_array_t*, num_procs);
+
+  /* Initialise outgoing message buffers */
+  /* TODO: It might make sense to only initialize when we are actually sending */
+  for (int q = 0; q < num_procs; q++) {
+    own->to_send[q] = sc_array_new(model->point_size);
+    resp->to_send[q] = sc_array_new(model->point_size);
+  }
+
+  /* Iterate through the points we are responsible for propagating */
+  for (int i = 0; i < (int)sdata->num_owned_resp; i++) {
+
+    /* Determine which processes should receive this point */
+    owners = model->owners_fn(&(sdata->points[i]), p4est);
+
+    /* Determine the receiver responsible for propagating this point in next
+        iteration */
+    responsible = model->resp_fn(&(sdata->points[i]), owners);
+    P4EST_ASSERT(0 <= responsible && responsible < num_procs);
+
+    /* Add this point to the relevant outgoing message buffers */
+    for (size_t j = 0; j < owners->elem_count; j++) {
+      int q = *(int*)sc_array_index_int(owners, j);
+      if (responsible == q)
+      {
+        /* Process q should own point i and be responsible for its propagation */
+        sc_array_push(resp->to_send[q]);
+        *(p4est_gmt_sphere_geodesic_seg_t*)sc_array_index_int(resp->to_send[q], resp->to_send[q]->elem_count-1) = sdata->points[i];
+      }
+      else 
+      {
+        /* Process q should own point i but not be responsible for its propagation */
+        sc_array_push(own->to_send[q]);
+        *(p4est_gmt_sphere_geodesic_seg_t*)sc_array_index_int(own->to_send[q], own->to_send[q]->elem_count-1) = sdata->points[i];
+      }
+    }
+
+    /* clean up to prepare for next point*/
+    sc_array_destroy(owners);
+  }
+}
+
+/** Update communication data with which processes p is sending points to and
+ *  how many points are being sent to each of these. 
+ * 
+ *  The output is stored in the fields comm->receivers and comm->recvs_counts.
+ *  We assume comm->to_send is already populated.
+ * 
+ * \param[in,out] comm communication data.
+ * \param[in] num_procs number of mpi processes
  */
 static void sphere_compute_receivers(p4est_gmt_sphere_comm_t *comm, int num_procs) 
 {
@@ -427,8 +494,14 @@ static void sphere_compute_receivers(p4est_gmt_sphere_comm_t *comm, int num_proc
   P4EST_ASSERT(comm->receivers->elem_count == comm->recvs_counts->elem_count);
 }
 
-/** Compute offsets to receive incoming points at, and total number of
- * incoming points 
+/** Update communication data with total number of incoming points, and 
+ *  offsets to receive incoming points at. 
+ * 
+ *  The outputs are stored in the fields comm->num_incoming and comm->offsets.
+ *  We assume that comm->senders and comm->senders_counts are already
+ *  populated.
+ * 
+ * \param[in,out] comm communication data.
  */
 static void sphere_compute_offsets(p4est_gmt_sphere_comm_t *comm) 
 {
@@ -443,6 +516,16 @@ static void sphere_compute_offsets(p4est_gmt_sphere_comm_t *comm)
   } 
 }
 
+/** Post non-blocking sends for points in the given communication data.
+ * 
+ * To each rank q in comm->receivers we send the points stored at 
+ * comm->to_send[q]
+ * 
+ * \param[in]   comm        communication data
+ * \param[in]   mpicomm     MPI communicator
+ * \param[out]  req         request storage of same length as comm->receivers
+ * \param[in]   point_size  size of a single point
+ */
 static void sphere_post_sends(p4est_gmt_sphere_comm_t *comm,
                               sc_MPI_Comm mpicomm,
                               sc_MPI_Request * req,
@@ -465,9 +548,21 @@ static void sphere_post_sends(p4est_gmt_sphere_comm_t *comm,
   }
 }
 
-
+/** Post non-blocking receives for senders in the given communication data.
+ * 
+ *  We expect to receive points from each sender in comm->senders. The number
+ *  of points each sender is sending is stored in comm->senders_counts (with
+ *  corresponding indexing). We receive each message at the offset stored in
+ *  comm->offsets (again with corresponding indexing).
+ * 
+ *  \param[in] comm communication data
+ *  \param[in,out] buffer points to array where received points are stored
+ *  \param[out] req request storage of same length as comm->senders
+ *  \param[in] mpicomm MPI communicator
+ *  \param[in] point_size size of a single point
+*/
 static void sphere_post_receives(p4est_gmt_sphere_comm_t *comm,
-                                 p4est_gmt_sphere_geodesic_seg_t *points,
+                                 p4est_gmt_sphere_geodesic_seg_t *buffer,
                                  sc_MPI_Request *req,
                                  sc_MPI_Comm mpicomm,
                                  size_t point_size
@@ -477,7 +572,7 @@ static void sphere_post_receives(p4est_gmt_sphere_comm_t *comm,
 
   for (int i = 0; i < (int)comm->senders->elem_count; i++) {
     int q = *(int*)sc_array_index_int(comm->senders, i);
-    mpiret = sc_MPI_Irecv(points + comm->offsets[i],
+    mpiret = sc_MPI_Irecv(buffer + comm->offsets[i],
                 (*(size_t*)sc_array_index_int(comm->senders_counts, i)) * point_size,
                 sc_MPI_BYTE,
                 q,  /* sending process */
@@ -491,10 +586,6 @@ static void sphere_post_receives(p4est_gmt_sphere_comm_t *comm,
 
 /** Communicate geodesics to the processes whose domain they *may* overlap.
  * 
- * We iterate over all locally known geodesics, work out which domains they
- * may overlap, and then send them to these processes.
- *  
- * 
  * \param[in] mpicomm   MPI communicator
  * \param[in] p4est     The forest
  * \param[in] model     Sphere model
@@ -506,81 +597,38 @@ model_sphere_communicate_points(sc_MPI_Comm mpicomm,
 {
   /* Sphere model */
   p4est_gmt_model_sphere_t *sdata = (p4est_gmt_model_sphere_t *)model->model_data;
-
   /* MPI data */
   int                 mpiret;
-  int                 num_procs, rank;
-
+  int                 num_procs;
   p4est_gmt_sphere_comm_t own, resp; /* not responsible, responsible */
 
   /* TODO: This naming convention is kind of confusing. Why not outgoing/incoming?*/
   sc_MPI_Request *recv_req; /* Requests for sends to receivers */
   sc_MPI_Request *sender_req; /* Requests for receives from senders */
 
-  /** per point data **/
-  sc_array_t         *owners; /* who to send the point to */
-  int                 responsible; /* who is in charge of propagating the point */
-
-  /* Get rank and total process count */
+  /* get total process count */
   mpiret = sc_MPI_Comm_size (mpicomm, &num_procs);
   SC_CHECK_MPI (mpiret);
-  mpiret = sc_MPI_Comm_rank (mpicomm, &rank);
-  SC_CHECK_MPI (mpiret);
 
-  /* Initialise index of outgoing message buffers */
-  own.to_send = P4EST_ALLOC(sc_array_t*, num_procs);
-  resp.to_send = P4EST_ALLOC(sc_array_t*, num_procs);
+  /* prepare outgoing buffers of points to send */
+  sphere_compute_outgoing_points(&resp, &own, p4est, model, num_procs);
 
-  /* Initialise outgoing message buffers */
-  /* TODO: It might make sense to only initialize when we are actually sending */
-  for (int q = 0; q < num_procs; q++) {
-    own.to_send[q] = sc_array_new(model->point_size);
-    resp.to_send[q] = sc_array_new(model->point_size);
-  }
+  /* free the points we received last iteration */
+  P4EST_FREE(sdata->points);
 
-  /* Iterate through points to add them to outgoing messages */
-  for (int i = 0; i < (int)sdata->num_owned_resp; i++) {
-    /* Determine which processes should receive this point */
-    owners = model->owners_fn(&(sdata->points[i]), p4est);
-    /* Determine the receiver responsible for propagating this point in next
-        iteration */
-    //printf("Proc %d responsible\n", rank);
-    responsible = model->resp_fn(&(sdata->points[i]), owners);
-    P4EST_ASSERT(0 <= responsible && responsible < num_procs);
-
-    //printf("Proc %d add to receivers\n", rank);
-    /* Add this point to the arrays of the processes who receive it */
-    for (size_t j = 0; j < owners->elem_count; j++) {
-      int q = *(int*)sc_array_index_int(owners, j);
-      if (responsible == q)
-      {
-        /* Process q should own point i and be responsible for its propagation */
-        sc_array_push(resp.to_send[q]);
-        *(p4est_gmt_sphere_geodesic_seg_t*)sc_array_index_int(resp.to_send[q], resp.to_send[q]->elem_count-1) = sdata->points[i];
-      }
-      else 
-      {
-        /* Process q should own point i but not be responsible for its propagation */
-        sc_array_push(own.to_send[q]);
-        *(p4est_gmt_sphere_geodesic_seg_t*)sc_array_index_int(own.to_send[q], own.to_send[q]->elem_count-1) = sdata->points[i];
-      }
-    }
-    sc_array_destroy(owners);
-  }
-
-  /* Compute which processes we are sending points to and how many points each
-     one receives */
+  /* record which processes p is sending points to and how many points each
+     process receives */
   sphere_compute_receivers(&own, num_procs);
   sphere_compute_receivers(&resp, num_procs);
 
-  /* initialize incoming message buffers */
+  /* initialize buffers for receiving communication data with sc_notify_ext */
   own.senders = sc_array_new(sizeof(int));
   resp.senders = sc_array_new(sizeof(int));
   own.senders_counts = sc_array_new(sizeof(size_t));
   resp.senders_counts = sc_array_new(sizeof(size_t));
 
   /* notify processes receiving points from p and determine processes sending
-   to p */
+   to p. Also exchange counts of points being sent. */
   sc_notify_ext(own.receivers, own.senders, own.recvs_counts, own.senders_counts, mpicomm);
   sc_notify_ext(resp.receivers, resp.senders, resp.recvs_counts, resp.senders_counts, mpicomm);
   P4EST_ASSERT(own.senders->elem_count == own.senders_counts->elem_count);
@@ -590,14 +638,13 @@ model_sphere_communicate_points(sc_MPI_Comm mpicomm,
   sphere_compute_offsets(&own);
   sphere_compute_offsets(&resp);
 
-  /* free the points we received last iteration */
-  P4EST_FREE(sdata->points);
-
-  /* update counts and create array for incoming points */
+  /* update counts of known points */
   model->M = resp.num_incoming + own.num_incoming;
-  sdata->points = P4EST_ALLOC(p4est_gmt_sphere_geodesic_seg_t, model->M);
   sdata->num_owned_resp = resp.num_incoming;
   sdata->num_owned = own.num_incoming;
+
+  /* allocate memory for incoming points */
+  sdata->points = P4EST_ALLOC(p4est_gmt_sphere_geodesic_seg_t, model->M);
 
   /* initialise outgoing request arrays */
   recv_req = P4EST_ALLOC(sc_MPI_Request, own.receivers->elem_count + resp.receivers->elem_count);
