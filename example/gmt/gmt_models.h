@@ -129,15 +129,40 @@ typedef struct p4est_gmt_sphere_geodesic_seg
   p4est_qcoord_t bb1x, bb1y, bb2x, bb2y; /* Bounding quadrant start and end atoms */
 } p4est_gmt_sphere_geodesic_seg_t;
 
+/** Communication data for the sphere model.
+ * 
+ *  This avoids duplicate code since communication patterns are essentially
+ *  identical for the two types of point we send (owned and responsible).
+ */
+typedef struct p4est_gmt_sphere_comm 
+{
+  int num_incoming; /* number of points that p receives in this iteration */
+  sc_array_t **to_send; /* q -> {points that should be sent to q } */
+  sc_array_t *receivers; /* Ranks receiving points from p */
+  sc_array_t *recvs_counts; /* Number of points each receiver gets from p */
+  sc_array_t *senders; /* Ranks sending points to p */
+  sc_array_t *senders_counts; /* Number of points p gets from each sender */
+  size_t * offsets; /* q -> offset to receive message from q at */
+} p4est_gmt_sphere_comm_t;
+
 /** Data used by the sphere model */
 typedef struct p4est_gmt_model_sphere
 {
   int resolution;
   /* number of geodesics which this rank must propagate */
   size_t num_owned_resp;
+
   /* number of geodesics which this rank knows but need not propagate */
   size_t num_owned;
+
+
   p4est_gmt_sphere_geodesic_seg_t *points;
+  
+  /* metadata for point communication */
+  p4est_gmt_sphere_comm_t own, resp;
+
+  /* metadata for partition search */
+  sc_array_t *geoseg_procs;
 } p4est_gmt_model_sphere_t;
 
 /** Create a specific sphere model.
