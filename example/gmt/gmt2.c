@@ -41,24 +41,9 @@
 #include <p4est_vtk.h>
 #include <sc_options.h>
 #include "gmt_models.h"
+#include "gmt_global.h"
 
 static const double irootlen = 1. / (double) P4EST_ROOT_LEN;
-
-typedef struct global
-{
-  int                 minlevel;
-  int                 maxlevel;
-  int                 balance;
-  int                 resolution;
-  int                 synthetic;
-  int                 latlongno;
-  int                 sphere; /* globe sphere model */
-  int                 distributed; /* are we running the distributed version */
-  sc_MPI_Comm         mpicomm;
-  p4est_t            *p4est;
-  p4est_gmt_model_t  *model;
-}
-global_t;
 
 static int
 setup_model (global_t * g)

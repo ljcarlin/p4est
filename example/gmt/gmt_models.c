@@ -26,7 +26,10 @@
 #include <p4est_communication.h>
 #include<p4est_base.h>
 #include<sc_notify.h>
-#include "gmt2.c"
+#include "gmt_global.h"
+#include <p4est_search.h>
+
+static const double irootlen = 1. / (double) P4EST_ROOT_LEN;
 
 static void
 model_set_geom(p4est_gmt_model_t *model,
@@ -244,16 +247,17 @@ static int lines_intersect(double p0_x, double p0_y, double p1_x, double p1_y,
    * by inverting the matrix (p1-p0, p2-p3). */
 
   /* Precompute reused values for efficiency */
-  double s1_x, s1_y, s2_x, s2_y;
+  double s1_x, s1_y, s2_x, s2_y, det_inv;
   s1_x = p1_x - p0_x;
   s1_y = p1_y - p0_y;
   s2_x = p3_x - p2_x;
   s2_y = p3_y - p2_y;
+  det_inv = -s2_x * s1_y + s1_x * s2_y;
 
   /* Compute line intersection */
   double s, t;
-  s = (-s1_y * (p0_x - p2_x) + s1_x * (p0_y - p2_y)) / (-s2_x * s1_y + s1_x * s2_y);
-  t = (s2_x * (p0_y - p2_y) - s2_y * (p0_x - p2_x)) / (-s2_x * s1_y + s1_x * s2_y);
+  s = (-s1_y * (p0_x - p2_x) + s1_x * (p0_y - p2_y)) * det_inv;
+  t = (s2_x * (p0_y - p2_y) - s2_y * (p0_x - p2_x)) * det_inv;
 
   /* Check intersection lies on relevant segment */
   if (s >= 0 && s <= 1 && t >= 0 && t <= 1)
@@ -299,18 +303,42 @@ model_sphere_intersect(p4est_topidx_t which_tree, const double coord[4],
     return 0;
   }
 
-  /* We do not refine if target resolution is reached. */
+  /* we do not refine if target resolution is reached */
   hx = coord[2] - coord[0];
   hy = coord[3] - coord[1];
-  if (SC_MAX(hx, hy) <= pow(.5, sdata->resolution))
-  {
+  if (SC_MAX(hx, hy) <= pow(.5, sdata->resolution)) {
     return 0;
   }
 
-  /* Check if the line segment L between p1 and p2 intersects the edges of
-   * the rectangle.
+  /* cull obvious non-intersections before running more expensive line
+   * intersection computations
    */
+  /* check if segment is left of quadrant */
+  if (pco->p1x < coord[0] && pco->p2x < coord[0]) {
+    return 0;
+  }
+  /* check if segment is below quadrant */
+  if (pco->p1y < coord[1] && pco->p2y < coord[1]) {
+    return 0;
+  }
+  /* check if segment is right of quadrant */
+  if (pco->p1x > coord[2] && pco->p2x > coord[2]) {
+    return 0;
+  }
+  /* check if segment is above quadrant */
+  if (pco->p1y > coord[3] && pco->p2y > coord[3]) {
+    return 0;
+  }
 
+  /* Check if segment is contained in the interior of quadrant */
+  if (pco->p1x >= coord[0] && pco->p1x <= coord[2] 
+      && pco->p1y >= coord[1] && pco->p1y <= coord[3]
+      && pco->p2x >= coord[0] && pco->p2x <= coord[2] 
+      && pco->p2y >= coord[1] && pco->p2y <= coord[3]) {
+    return 1;
+  }
+
+  /* Check if the segment intersects the edges of quadrant */
   /* Check if L intersects the bottom edge of rectangle */
   if (lines_intersect(pco->p1x, pco->p1y, pco->p2x, pco->p2y, coord[0], coord[1], coord[2], coord[1]))
   {
@@ -328,15 +356,6 @@ model_sphere_intersect(p4est_topidx_t which_tree, const double coord[4],
   }
   /* Check if L intersects the right edge of rectangle */
   if (lines_intersect(pco->p1x, pco->p1y, pco->p2x, pco->p2y, coord[2], coord[1], coord[2], coord[3]))
-  {
-    return 1;
-  }
-
-  /* Check if L is contained in the interior of rectangle.
-   * Since we have already ruled out intersections it suffices
-   * to check if one of the endpoints of L is in the interior.
-   */
-  if (pco->p1x >= coord[0] && pco->p1x <= coord[2] && pco->p1y >= coord[1] && pco->p1y <= coord[3])
   {
     return 1;
   }
@@ -364,13 +383,11 @@ model_sphere_owners(void *point, p4est_t * p4est)
   q.x = seg->bb1x;
   q.y = seg->bb1y;
   first = p4est_comm_find_owner(p4est, seg->which_tree, &q, p4est->mpirank);
-  //printf("First owner: %d\n\n", first);
 
   /* Last atom */
   q.x = seg->bb2x;
   q.y = seg->bb2y;
   last = p4est_comm_find_owner(p4est, seg->which_tree, &q, p4est->mpirank);
-  //printf("Last owner: %d\n\n", first);
 
   owners = sc_array_new_count(sizeof(int), last-first+1);
   for (int i = 0; i <= last-first; i++) {
@@ -456,12 +473,7 @@ sphere_partition_quadrant (p4est_t * p4est, p4est_topidx_t which_tree,
   P4EST_ASSERT (0 <= pfirst && pfirst <= plast);
   P4EST_ASSERT (point == NULL);
 
-  /* stop the recursion when a quadrant is owned by a single process */
-  if (pfirst == plast) {
-    return 0;
-  }
-
-  /* continue recursion */
+  /* always continue, as recursion is controlled by point callbacks */
   return 1;
 }
 
@@ -556,7 +568,6 @@ sphere_compute_outgoing_points_alt(p4est_gmt_sphere_comm_t *resp,
 
   p4est_gmt_model_sphere_t *sdata = (p4est_gmt_model_sphere_t *)model->model_data;
   sc_array_t               *points;
-  
 
   /* initialise to -1 to signify no points have been added to send buffers */
   sdata->geoseg_procs = sc_array_new_count(sizeof (int), sdata->num_owned_resp);
@@ -585,6 +596,7 @@ sphere_compute_outgoing_points_alt(p4est_gmt_sphere_comm_t *resp,
 
   /* clean up search objects */
   sc_array_destroy_null (&points);
+  sc_array_destroy_null (&sdata->geoseg_procs);
 }
 
 /** Update communication data with which processes p is sending points to and
@@ -732,7 +744,7 @@ model_sphere_communicate_points(sc_MPI_Comm mpicomm,
   SC_CHECK_MPI (mpiret);
 
   /* prepare outgoing buffers of points to send */
-  sphere_compute_outgoing_points(resp, own, p4est, model, num_procs);
+  sphere_compute_outgoing_points_alt(resp, own, p4est, model, num_procs);
 
   /* free the points we received last iteration */
   P4EST_FREE(sdata->points);
