@@ -24,7 +24,7 @@
 
 /** \file p4est_communication.h
  *
- * Communication and transfer routines.
+ * Parallel messaging and support code.
  *
  * \ingroup p4est
  */
@@ -43,7 +43,7 @@ SC_EXTERN_C_BEGIN;
  *                      search.
  * \param [in] nmemb    Number of entries in array MINUS ONE.
  * \return              Index p such that `gfq[p] <= target < gfq[p + 1]`.
- * \note                This function differs from \ref p4est_find_partiton
+ * \note                This function differs from \ref p4est_find_partition
  *                      since \ref p4est_find_partition searches for two
  *                      targets using binary search in an optimized way
  *                      but \ref p4est_bsearch_partition only performs a
@@ -93,7 +93,7 @@ int                 p4est_comm_parallel_env_is_null (p4est_t * p4est);
 
 /** Reduce MPI communicator to non-empty ranks (i.e., nonzero quadrant counts).
  *
- * \param [in/out] p4est_supercomm  Object which communicator is reduced.
+ * \param [in,out] p4est_supercomm  Object which communicator is reduced.
  *                                  Points to NULL if this p4est does not
  *                                  exists.
  *
@@ -106,7 +106,7 @@ int                 p4est_comm_parallel_env_reduce (p4est_t **
  * will remain in the reduced communicator regardless whether they are empty
  * or not.
  *
- * \param [in/out] p4est_supercomm  Object which communicator is reduced.
+ * \param [in,out] p4est_supercomm  Object which communicator is reduced.
  *                                  Points to NULL if this p4est does not
  *                                  exists.
  * \param [in] group_add         Group of ranks that will remain in
@@ -252,8 +252,8 @@ int                 p4est_comm_find_owner (p4est_t * p4est,
  * This is determined separately for the beginning and end of the tree.
  * \param [in] p4est            The p4est to work on.
  * \param [in] which_tree       The tree in question must be partially owned.
- * \param [out] full_tree[2]    Full ownership of beginning and end of tree.
- * \param [out] tree_contact[4] True if there are neighbors across the face.
+ * \param [out] full_tree       Full ownership of beginning and end of tree.
+ * \param [out] tree_contact    True if there are neighbors across the face.
  * \param [out] firstq          Smallest possible first quadrant on this core.
  * \param [out] nextq           Smallest possible first quadrant on next core.
  *                          Any of tree_contact, firstq and nextq may be NULL.
@@ -268,8 +268,8 @@ void                p4est_comm_tree_info (p4est_t * p4est,
 /** Test if the 3x3 neighborhood of a quadrant is owned by this processor.
  * \param [in] p4est            The p4est to work on.
  * \param [in] which_tree       The tree index to work on.
- * \param [in] full_tree[2]     Flags as computed by p4est_comm_tree_info.
- * \param [in] tree_contact[4]  Flags as computed by p4est_comm_tree_info.
+ * \param [in] full_tree        Flags as computed by p4est_comm_tree_info.
+ * \param [in] tree_contact     Flags as computed by p4est_comm_tree_info.
  * \param [in] q                The quadrant to be checked.
  * \return          Returns true iff this quadrant's 3x3 neighborhood is owned.
  */
@@ -304,11 +304,11 @@ unsigned            p4est_comm_checksum (p4est_t * p4est,
 /** Context data to allow for split begin/end data transfer. */
 typedef struct p4est_transfer_context
 {
-  int                 variable;
-  int                 num_senders;
-  int                 num_receivers;
-  sc_MPI_Request     *recv_req;
-  sc_MPI_Request     *send_req;
+  int                 variable; /**< Boolean: item sizes vary. */
+  int                 num_senders;      /**< Sender process count. */
+  int                 num_receivers;    /**< Receiver process count. */
+  sc_MPI_Request     *recv_req; /**< Array of receive requests. */
+  sc_MPI_Request     *send_req; /**< Array of send requests. */
 }
 p4est_transfer_context_t;
 
@@ -584,7 +584,7 @@ void                p4est_transfer_end (p4est_transfer_context_t * tc);
 
 /** Callback function for \ref p4est_transfer_search, as well as its variants
  * \ref p4est_transfer_search_gfx and \ref p4est_transfer_search_gfp.
- * 
+ *
  * \param[in] p4est In the versions of transfer search not requiring an
  *                  explicit p4est this is a dummy p4est where only the user
  *                  pointer is initialized.
@@ -603,14 +603,17 @@ typedef int         (*p4est_intersect_t) (p4est_t *p4est,
  * are exactly the points which intersect its domain. Points are completely
  * arbitrary and may for example represent geometric objects such as polyhedra
  * or geodesics.
- * 
+ *
  * The \a points array is subdivided into two sub-arrays. The first sub-array,
  * consisting of the first \a num_resp consecutive elements, contains the
  * points that this process is responsible for propagating during
  * \ref p4est_transfer_search. The second sub-array, consisting of the
  * remaining elements, contains the points known to this process that it is
- * not responsible for propagating.
- * 
+ * not responsible for propagating. In the case that \ref p4est_transfer_search
+ * is run with the option \a save_unowned then the first sub-array may contain
+ * unowned points, so that these points are not forgotten. In this case these
+ * points are the first \a num_unowned points of the array.
+ *
  * This structure is intended to be initialised on each process, storing a
  * disjoint subset of the global set of points. Initially, \a num_resp
  * should be set to the length of \a points so that each each process is
@@ -619,24 +622,24 @@ typedef int         (*p4est_intersect_t) (p4est_t *p4est,
  * propagating a point then the point will be forgotten after calling
  * \ref p4est_transfer_search, and similarly that if multiple processes are
  * responsible for propagating a point then it will be duplicated.
- * 
+ *
  * Calling \ref p4est_transfer_search performs the transfer of points and
  * updates \a num_resp, while preserving the property that each point has
  * exactly one process responsible for propagating it.
- * 
+ *
  * Users may modify the points array between calls to
  * \ref p4est_transfer_search. For example, point coordinates could
  * be modified to represent movement of points as a simulation evolves through
  * time. Care should be taken when adding or deleting points, and when
  * modifying the order of \a points, to ensure that \a num_resp is updated
  * and that the first \a num_resp points are still the points that the
- * process should propagate. 
- * 
+ * process should propagate.
+ *
  * During the transfer of points in \ref p4est_transfer_search the \a points
  * array is destroyed and reallocated. Thus users should not maintain pointers
  * to it or its contents.
  */
-typedef struct p4est_transfer_search 
+typedef struct p4est_points_context
 {
   sc_array_t *points;      /**< All points known to this process. */
   p4est_locidx_t num_resp; /**< The number of points this process is
@@ -644,22 +647,29 @@ typedef struct p4est_transfer_search
                                 \ref p4est_transfer_search is called.
                                 These points are stored in the first
                                 \a num_resp positions of \a points. */
-} p4est_transfer_search_t;
+  p4est_locidx_t num_unowned; /**< The number of unowned points that this
+                            process is responsible for propagating. These
+                            points are stored in the first \a num_unowned
+                            positions of \a points. This is only relevant if
+                            \ref p4est_transfer_search is called with the
+                            \a save_unowned option. */
+}
+p4est_points_context_t;
 
 /** Collective, point-to-point transfer for maintaining distributed
  * collection of points. After communication, points are stored (only) on the
  * processes whose domains they intersect. A return value of 0 indicates
  * success. An nonzero value is returned to indicate error. Errors occurs when
- * the number of bytes transferred in any single message would exceed 
+ * the number of bytes transferred in any single message would exceed
  * INT_MAX (2GB on most machines), or if any process would receive more than
  * P4EST_LOCIDX_MAX points in total. Error/success is collective. If an error
  * does occur then the contents of \a c are not modified.
- * 
+ *
  * Points can be instances of an arbitrary struct. Point-quadrant intersection
  * is specified by the user supplied callback \a intersect. A single point may
  * intersect multiple process domains, and after communication will be known
  * to each of these processes.
- * 
+ *
  * Each process is responsible for propagating a subset of the points it
  * knows. Before communication, exactly one process should be responsible for
  * propagating each point. The intersecting processes for each point are
@@ -673,13 +683,13 @@ typedef struct p4est_transfer_search
  * intersect the domain of any process. If this option is enabled then these
  * points are remembered by the process that was responsible for propagating
  * them.
- * 
+ *
  * The points that a process is responsible for propagating are stored in a
- * subarray of the array of known points, as described in 
- * \ref p4est_transfer_search_t. Users should take care to maintain this
+ * subarray of the array of known points, as described in
+ * \ref p4est_points_context. Users should take care to maintain this
  * subdivision if they modify the array of points between rounds of
  * communication.
- * 
+ *
  * \param [in] p4est        The forest we search with. Its user_pointer is
  *                          passed to the intersection callback.
  * \param [in,out] c        Points and propagation responsibilities. The
@@ -692,15 +702,15 @@ typedef struct p4est_transfer_search
  * \return 0 if transfer was successful.
  */
 int
-p4est_transfer_search (p4est_t *p4est, p4est_transfer_search_t *c, 
+p4est_transfer_search (p4est_t *p4est, p4est_points_context_t *c,
                        p4est_intersect_t intersect, int save_unowned);
 
 /** The same as \ref p4est_transfer_search, except that we search with a
  * partition, rather than an explicit p4est. The partition can be that of any
  * p4est, not necessarily known to the caller.
- * 
+ *
  * This function is collective.
- * 
+ *
  * \param [in] gfq          Partition offsets to traverse.  Length \a nmemb + 1.
  * \param [in] gfp          Partition position to traverse.  Length \a nmemb + 1.
  * \param [in] nmemb        Number of processors encoded in \a gfq (plus one).
@@ -722,26 +732,26 @@ p4est_transfer_search_gfx (const p4est_gloidx_t *gfq,
                             int nmemb, p4est_topidx_t num_trees,
                             void *user_pointer,
                             sc_MPI_Comm mpicomm,
-                            p4est_transfer_search_t *c,
+                            p4est_points_context_t *c,
                             p4est_intersect_t intersect,
                             int save_unowned);
 
 /** The same as \ref p4est_transfer_search, except that we search with a
  * partition, rather than an explicit p4est. The partition can be that of any
  * p4est, not necessarily known to the caller.
- * 
+ *
  * This function is similar to \ref p4est_transfer_search_gfx, but does not
  * require the \ref p4est_gloidx_t array gfq. If gfq is available, using
  * \ref p4est_transfer_search_gfx is recommended, because it is slightly
  * faster.
- * 
+ *
  * This function is collective.
- * 
+ *
  * \param [in] gfp          Partition position to traverse.  Length \a nmemb + 1.
  * \param [in] nmemb        Number of processors encoded in \a gfq (plus one).
  * \param [in] num_trees    Tree number must match the contents of \a gfq.
  * \param [in] user_pointer Passed to the intersection callback.
- * \param [in] sc_MPI_Comm  Function is collective over the communicator.
+ * \param [in] mpicomm      Function is collective over the communicator.
  * \param [in,out] c        Points and propagation responsibilities. The
  *                          array \a c.points is destroyed and reallocated,
  *                          so pointers to it should not be referenced after
@@ -756,7 +766,7 @@ p4est_transfer_search_gfp (const p4est_quadrant_t *gfp, int nmemb,
                             p4est_topidx_t num_trees,
                             void *user_pointer,
                             sc_MPI_Comm mpicomm,
-                            p4est_transfer_search_t *c,
+                            p4est_points_context_t *c,
                             p4est_intersect_t intersect,
                             int save_unowned);
 
