@@ -633,7 +633,7 @@ p4est_gmt_model_sphere_new (int resolution, const char *input,
   /* allocate model */
   model = P4EST_ALLOC_ZERO (p4est_gmt_model_t, 1);
   model->model_data = sdata = P4EST_ALLOC (p4est_gmt_model_sphere_t, 1);
-  model->c = P4EST_ALLOC (p4est_transfer_search_t, 1);
+  model->c = P4EST_ALLOC (p4est_points_context_t, 1);
   model->c->points = sc_array_new_count (sizeof (p4est_gmt_sphere_geoseg_t),
                          local_num_points);
   model->c->num_resp = local_num_points;

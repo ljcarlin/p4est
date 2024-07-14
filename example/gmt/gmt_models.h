@@ -75,7 +75,7 @@ typedef struct p4est_gmt_model
   void               *model_data;
 
   /* model points and propagation responsibilities for distributed mode */
-  p4est_transfer_search_t   *c;
+  p4est_points_context_t   *c;
 
   /* point-quadrant intersection */
   p4est_intersect_t intersect;
