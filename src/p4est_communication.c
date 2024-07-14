@@ -1980,6 +1980,7 @@ p4est_transfer_search (p4est_t *p4est, p4est_points_context_t *c,
   internal.resp = NULL;
   internal.own = NULL;
   internal.last_procs = NULL;
+  internal.unowned_points = NULL;
 
   /* These variables are not used because internal.p4est is not NULL */
   internal.gfp = NULL;
@@ -2024,6 +2025,7 @@ p4est_transfer_search_gfx (const p4est_gloidx_t *gfq,
   internal.resp = NULL;
   internal.own = NULL;
   internal.last_procs = NULL;
+  internal.unowned_points = NULL;
 
   /* Indicates that we are not searching with an actual p4est */
   internal.p4est = NULL;
@@ -2059,6 +2061,7 @@ p4est_transfer_search_gfp (const p4est_quadrant_t *gfp, int nmemb,
   internal.resp = NULL;
   internal.own = NULL;
   internal.last_procs = NULL;
+  internal.unowned_points = NULL;
 
   /* Indicates that we are not searching with an actual p4est */
   internal.p4est = NULL;
